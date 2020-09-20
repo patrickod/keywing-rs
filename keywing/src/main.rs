@@ -7,15 +7,16 @@ use panic_persist as _;
 // Used to set the program entry point
 use cortex_m_rt::entry;
 
-// Provides definitions for our development board
-use nrf52840_hal::{
-    gpio::{p0::Parts as P0Parts, p1::Parts as P1Parts, Level},
-    prelude::*,
-    spim::{Frequency as SpimFrequency, Pins as SpimPins, MODE_0},
-    target::Peripherals,
-    twim::{Frequency as TwimFrequency, Pins as TwimPins},
-    Clocks, Rng, Spim, Timer, Twim,
-};
+extern crate feather_m4 as hal;
+
+use hal::prelude::*;
+use hal::clock::GenericClockController;
+use hal::pac::{CorePeripherals,Peripherals};
+use hal::trng::Trng;
+use hal::delay::Delay;
+use hal::Pins;
+use hal::{i2c_master,spi_master};
+use hal::time::U32Ext;
 
 use rtt_target::{rprintln, rtt_init_print};
 
@@ -41,11 +42,19 @@ fn main() -> ! {
 }
 
 fn inner_main() -> Result<(), &'static str> {
-    let board = Peripherals::take().ok_or("Error getting board!")?;
-    let mut timer = Timer::new(board.TIMER0);
-    let mut delay = Timer::new(board.TIMER1);
-    let mut _rng = Rng::new(board.RNG);
-    let _clocks = Clocks::new(board.CLOCK).enable_ext_hfosc();
+    let mut peripherals = Peripherals::take().ok_or("Error getting board!")?;
+    let mut _pins = Pins::new(peripherals.PORT);
+    let _core = CorePeripherals::take().unwrap();
+
+    let mut _rng: Trng = Trng::new(&mut peripherals.MCLK, peripherals.TRNG);
+    let mut _clocks = GenericClockController::with_external_32kosc(
+        peripherals.GCLK,
+        &mut peripherals.MCLK,
+        &mut peripherals.OSC32KCTRL,
+        &mut peripherals.OSCCTRL,
+        &mut peripherals.NVMCTRL,
+    );
+    let mut delay = Delay::new(_core.SYST, &mut _clocks);
 
     // use ChannelMode::NoBlockS
     rtt_init_print!(NoBlockSkip, 4096);
@@ -56,52 +65,45 @@ fn inner_main() -> Result<(), &'static str> {
         rprintln!("Clean boot!");
     }
 
-    let p0 = P0Parts::new(board.P0);
-    let p1 = P1Parts::new(board.P1);
+    let kbd_lcd_reset = _pins.d5;
+    let _stm_cs = _pins.d6;
+    let lcd_cs = _pins.d9;
+    let lcd_dc = _pins.d10;
 
-    let kbd_lcd_reset = p1.p1_08; // GPIO5, D5
-    let _stm_cs = p0.p0_07; // GPIO6, D6,
-    let lcd_cs = p0.p0_26; // GPIO9, D9,
-    let lcd_dc = p0.p0_27; // GPIO10, D10
-
-    let kbd_sda = p0.p0_12.into_floating_input().degrade();
-    let kbd_scl = p0.p0_11.into_floating_input().degrade();
-
-    let kbd_i2c = Twim::new(
-        board.TWIM0,
-        TwimPins {
-            sda: kbd_sda,
-            scl: kbd_scl,
-        },
-        TwimFrequency::K100,
+    // i2c keyboard interface
+    // kbd SDA = D12
+    // kbd SCL = D11
+    // FREQ 100KHZ
+    let kbd_i2c = i2c_master(
+        &mut _clocks,
+        100u32.khz(),
+        peripherals.SERCOM2,
+        &mut peripherals.MCLK,
+        _pins.sda,
+        _pins.scl,
+        &mut _pins.port
     );
 
     let mut kbd = Bbq10Kbd::new(kbd_i2c);
 
-    // Pull the neopixel lines low so noise doesn't make it turn on spuriously
-    let _keywing_neopixel = p0.p0_06.into_push_pull_output(Level::Low); // GPIO11, D11
-    let _feather_neopixel = p0.p0_16.into_push_pull_output(Level::Low);
-
-    let spim = Spim::new(
-        board.SPIM3,
-        SpimPins {
-            sck: p0.p0_14.into_push_pull_output(Level::Low).degrade(),
-            miso: Some(p0.p0_15.into_floating_input().degrade()),
-            mosi: Some(p0.p0_13.into_push_pull_output(Level::Low).degrade()),
-        },
-        SpimFrequency::M32,
-        MODE_0,
-        0x00,
+    let lcd_spi = spi_master(
+        &mut _clocks,
+        32u32.mhz(),
+        peripherals.SERCOM1,
+        &mut peripherals.MCLK,
+        _pins.sck,
+        _pins.mosi,
+        _pins.miso,
+        &mut _pins.port
     );
 
     let mut lcd = Ili9341::new_spi(
-        spim,
-        lcd_cs.into_push_pull_output(Level::High),
-        lcd_dc.into_push_pull_output(Level::High),
-        kbd_lcd_reset.into_push_pull_output(Level::High),
+        lcd_spi,
+        lcd_cs.into_push_pull_output(&mut _pins.port),
+        lcd_dc.into_push_pull_output(&mut _pins.port),
+        kbd_lcd_reset.into_push_pull_output(&mut _pins.port),
         &mut delay,
-    )
-    .unwrap();
+    ).unwrap();
 
     lcd.set_orientation(Orientation::Landscape).unwrap();
 
@@ -125,7 +127,7 @@ fn inner_main() -> Result<(), &'static str> {
     rprintln!("Vers: {:?}", vers);
 
     kbd.sw_reset().unwrap();
-    timer.delay_ms(10u8);
+    delay.delay_ms(10u8);
 
     let vers = kbd.get_version().unwrap();
 
@@ -215,12 +217,12 @@ fn inner_main() -> Result<(), &'static str> {
             }
             KeyRaw::Invalid => {
                 if let Some(buf) = fbuffy.inner() {
-                    timer.start(1_000_000u32);
+                    // timer.start(1_000_000u32);
                     lcd.draw_raw(0, 0, 319, 239, buf).map_err(|_| "bad buffy")?;
-                    let done = timer.read();
-                    rprintln!("Drew in {}ms.", done / 1000);
+                    // let done = timer.read();
+                    // rprintln!("Drew in {}ms.", done / 1000);
                 } else {
-                    timer.delay_ms(38u8);
+                    delay.delay_ms(38u8);
                 }
             }
             _ => {}

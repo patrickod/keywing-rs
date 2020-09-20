@@ -1,7 +1,7 @@
 [package]
-name = "tiny-nrf52"
+name = "keywing"
 version = "0.1.0"
-authors = ["James Munns <james.munns@ferrous-systems.com>"]
+authors = ["Patrick O'Doherty <p@trickod.com>"]
 edition = "2018"
 
 [dependencies]
@@ -21,14 +21,13 @@ path = "../ili9341-rs"
 version = "0.1.0"
 path = "../bbq10kbd"
 
-[dependencies.nrf52840-hal]
-version = "0.10.0"
-features = ["rt"]
-
 [dependencies.panic-persist]
 version = "0.2.1"
 default-features = false
 features = ["utf8"]
+
+[dependencies.feather_m4]
+version = "0.5.0"
 
 [profile.dev]
 lto             = true
@@ -39,12 +38,6 @@ codegen-units   = 1
 opt-level       = 0
 
 [profile.release]
-lto             = true
-panic           = "abort"
-debug           = true
-incremental     = false
-codegen-units   = 1
-opt-level       = 's'
-
-[patch.crates-io]
-nrf-hal-common = { path = "../nrf-hal/nrf-hal-common" }
+debug = true
+lto = true
+opt-level = "s"

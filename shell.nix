@@ -1,6 +1,4 @@
 let
-  rust-version = "1.46.0";
-
   nixpkgs = fetchGit {
     url = "https://github.com/patrickod/nixpkgs.git";
     rev = "8bb6ca5f0a93bb0b9264b50a8c56431c7c7cc591";
@@ -21,8 +19,7 @@ let
 
 in
   pkgs.mkShell {
-    name = "rust-dev";
-    nativeBuildInputs = with pkgs; [
+    buildInputs = with pkgs; [
       (rustChannels.stable.rust.override {
         targets = targets;
         extensions = [
